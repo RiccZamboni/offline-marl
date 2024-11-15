@@ -277,8 +277,67 @@ def calculate_returns(
     episode_returns = sum_rewards(terminals, rewards)
     return episode_returns
 
+def plot_action_distribution(
+    vault_name: str,
+    vault_uids: Optional[List[str]] = None,
+    rel_dir: str = "vaults",
+    save_plot: bool = False,
+    discretization: bool = False,
+) -> None:
+    """Plots the distribution of actions.
 
-def get_saco(experience: Dict[str, Array]) -> Tuple[float, Array, Array]:
+    Args:
+        vault_name (string): the name of the Vault,
+            not containing the .vlt suffix
+        vault_uids (List[str]): a list of uids of datasets in the Vault,
+            use if we only describe a subset of all datasets in the Vault
+        rel_dir (string): relative  directory of the Vault
+        save_plot (bool): True when the user wants to save the generated plot
+
+    Artefacts:
+        plt shows a scatter plot of action pairs if meaningful (2-dim)
+
+    """
+    # get all uids if not specified
+    if vault_uids is None:
+        vault_uids = get_available_uids(f"./{rel_dir}/{vault_name}")
+
+    single_values = []
+    all_uid_count_vals = {}
+    all_uid_count_freq = {}
+    for uid in vault_uids:
+        vlt = Vault(vault_name=vault_name, rel_dir=rel_dir, vault_uid=uid)
+        exp = vlt.read().experience
+
+        reshaped_actions = exp["actions"].reshape((*exp["actions"].shape[:2], -1))
+        f, ax = plt.subplots(1, 1, sharex=True, sharey=True)
+        ax.set_title("Test")
+        ax.scatter(reshaped_actions[:,:,0],reshaped_actions[:,:,1], s=0.5)
+
+        saco, count_vals, count_freq = get_saco(exp, discretization)
+        all_uid_count_freq[uid] = count_freq
+        all_uid_count_vals[uid] = count_vals
+
+        single_values.append([uid, saco])
+
+    print(tabulate(single_values, headers=["Uid", "Joint SACo"]))
+
+    if plot_count_freq:
+        if save_plot:
+            plot_count_frequencies(
+                all_uid_count_vals,
+                all_uid_count_freq,
+                save_path=f"{rel_dir}/{vault_name}/count_frequency_loglog.pdf",
+            )
+        else:
+            plot_count_frequencies(all_uid_count_vals, all_uid_count_freq)
+
+    return
+
+
+
+
+def get_saco(experience: Dict[str, Array], discretization) -> Tuple[float, Array, Array]:
     """Calculate the joint SACo in a dataset of experience.
 
     Args:
@@ -296,6 +355,16 @@ def get_saco(experience: Dict[str, Array]) -> Tuple[float, Array, Array]:
     reshaped_actions = experience["actions"].reshape((*experience["actions"].shape[:2], -1))
     reshaped_states = states.reshape((*experience["infos"]["state"].shape[:2], -1))
     state_pairs = np.concatenate((reshaped_states, reshaped_actions), axis=-1)
+    if discretization:
+        for axis in range(len(state_pairs[0])):
+                axmin, axmax = np.min(states[:, axis]), np.max(states[:, axis])
+                state_pairs[:, axis] = np.digitize(state_pairs[:, axis], np.linspace(axmin, axmax, num=100))
+                
+        state_pairs.astype(int)
+
+        # hll = HyperLogLog(0.01)
+        # for state in tqdm(states, total=len(states)):
+        #    hll.add(",".join([str(s) for s in state]))
 
     unique_vals, counts = np.unique(state_pairs, axis=1, return_counts=True)
     count_vals, count_freq = np.unique(counts, return_counts=True)
@@ -350,6 +419,7 @@ def describe_coverage(
     rel_dir: str = "vaults",
     plot_count_freq: bool = True,
     save_plot: bool = False,
+    discretization: bool = False
 ) -> None:
     """Provides coverage, structural and episode return descriptors of a Vault of datasets.
 
@@ -382,7 +452,7 @@ def describe_coverage(
         vlt = Vault(vault_name=vault_name, rel_dir=rel_dir, vault_uid=uid)
         exp = vlt.read().experience
 
-        saco, count_vals, count_freq = get_saco(exp)
+        saco, count_vals, count_freq = get_saco(exp, discretization)
         all_uid_count_freq[uid] = count_freq
         all_uid_count_vals[uid] = count_vals
 
@@ -411,6 +481,7 @@ def descriptive_summary(
     save_hist: bool = False,
     n_bins: int = 40,
     done_flags: tuple = ("terminals",),
+    discretization: bool = False,
 ) -> Dict[str, Array]:
     """Provides coverage, structural and episode return descriptors of a Vault of datasets.
 
@@ -450,7 +521,7 @@ def descriptive_summary(
         vlt = Vault(vault_name=vault_name, rel_dir=rel_dir, vault_uid=uid)
         exp = vlt.read().experience
 
-        saco, _, _ = get_saco(exp)
+        saco, _, _ = get_saco(exp, discretization)
         mean, stddev, max_ret, min_ret, episode_returns = get_episode_return_descriptors(exp, done_flags)
         n_traj = len(episode_returns)
         n_trans = exp["actions"].shape[1]
